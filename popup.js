@@ -3,10 +3,13 @@ const lastNameEl      = document.getElementById('lastName');
 const firstNameEl     = document.getElementById('firstName');
 const lastNameKanaEl  = document.getElementById('lastNameKana');
 const firstNameKanaEl = document.getElementById('firstNameKana');
+const birthDateEl     = document.getElementById('birthDate');
 const facilityEl      = document.getElementById('facility');
 const emailEl         = document.getElementById('email');
 const phoneEl         = document.getElementById('phone');
+const postalCodeEl    = document.getElementById('postalCode');
 const prefectureEl    = document.getElementById('prefecture');
+const addressEl       = document.getElementById('address');
 const jobTitleEl      = document.getElementById('jobTitle');
 const departmentEl    = document.getElementById('department');
 const jobTypeEl       = document.getElementById('jobType');
@@ -21,10 +24,13 @@ chrome.storage.local.get(['profile'], (result) => {
   firstNameEl.value     = p.firstName     || '';
   lastNameKanaEl.value  = p.lastNameKana  || '';
   firstNameKanaEl.value = p.firstNameKana || '';
+  birthDateEl.value     = p.birthDate     || '';
   facilityEl.value      = p.facility      || '';
   emailEl.value         = p.email         || '';
   phoneEl.value         = p.phone         || '';
+  postalCodeEl.value    = p.postalCode    || '';
   prefectureEl.value    = p.prefecture    || '';
+  addressEl.value       = p.address       || '';
   jobTitleEl.value      = p.jobTitle      || '';
   departmentEl.value    = p.department    || '';
   jobTypeEl.value       = p.jobType       || '';
@@ -37,10 +43,13 @@ saveBtn.addEventListener('click', () => {
     firstName:     firstNameEl.value.trim(),
     lastNameKana:  lastNameKanaEl.value.trim(),
     firstNameKana: firstNameKanaEl.value.trim(),
+    birthDate:     birthDateEl.value.trim(),
     facility:      facilityEl.value.trim(),
     email:         emailEl.value.trim(),
     phone:         phoneEl.value.trim(),
+    postalCode:    postalCodeEl.value.trim(),
     prefecture:    prefectureEl.value.trim(),
+    address:       addressEl.value.trim(),
     jobTitle:      jobTitleEl.value.trim(),
     department:    departmentEl.value.trim(),
     jobType:       jobTypeEl.value.trim(),
