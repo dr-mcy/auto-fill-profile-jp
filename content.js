@@ -1,10 +1,8 @@
 // ======================================================
-// content.js — フォーム自動入力 v3.3（日本語版）
+// content.js — フォーム自動入力 v3.3.1（日本語版）
 //   v3.2: ふりがな（ひらがな）/ フリガナ（カタカナ）自動判定対応
 //   v3.3: Bug修正 + 生年月日・郵便番号・住所対応
-//     - Google Forms 組み込みメール欄対応
-//     - 複合ラベル（勤務先電話番号等）の誤マッチ修正
-//     - 生年月日、郵便番号、住所フィールド追加
+//   v3.3.1: Google Forms 日付フィールド対応を強化（多言語・多type対応）
 // ======================================================
 
 // --- キーワード定義 ---
@@ -92,7 +90,6 @@ function toHiragana(str) {
 
 // ==================================================
 // ラベルがカタカナを要求しているか判定
-//   ラベルにカタカナが含まれていればカタカナ、そうでなければひらがな
 // ==================================================
 function wantsKatakana(originalLabel) {
   return /\u30D5\u30EA\u30AC\u30CA|\u30AB\u30CA|\u30AB\u30BF\u30AB\u30CA/.test(originalLabel);
@@ -123,16 +120,9 @@ function normalizeLabel(text) {
 
 // ==================================================
 // ラベルからフィールドキーを特定
-//   判定順序が重要：
-//     0) ふりがな系（最優先）
-//     1) phone / email / postalCode / address / birthDate（複合ラベル対策で facility より先）
-//     2) facility
-//     3) lastName / firstName
-//     4) prefecture / jobTitle / department / jobType
-//     5) fullName（最後）
 // ==================================================
 function matchFieldKey(label) {
-  // 0) ふりがな系を最優先（「氏名」「名前」より先に判定）
+  // 0) ふりがな系を最優先
   if (FIELD_MAP.fullNameKana.some((kw) => label.includes(kw.toLowerCase()))) {
     return 'fullNameKana';
   }
@@ -142,13 +132,11 @@ function matchFieldKey(label) {
   if (FIELD_MAP.firstNameKana.some((kw) => label.includes(kw.toLowerCase()))) {
     return 'firstNameKana';
   }
-  // 「ふりがな」「フリガナ」「かな」「カナ」がラベルに含まれていればフルネームふりがなと判定
   if (/ふりがな|フリガナ|かな|カナ/.test(label)) {
     return 'fullNameKana';
   }
 
   // 1) 具体的なフィールドを facility より先に判定（複合ラベル対策）
-  //    「勤務先電話番号」→ phone、「勤務先住所」→ address、「勤務先郵便番号」→ postalCode
   if (FIELD_MAP.phone.some((kw) => label.includes(kw.toLowerCase()))) {
     return 'phone';
   }
@@ -231,7 +219,6 @@ function getProfileValue(profile, key, originalLabel) {
   const value = profile[key];
   if (!value) return value;
 
-  // ふりがな系のキーならラベルに応じて変換
   if (key === 'fullNameKana' || key === 'lastNameKana' || key === 'firstNameKana') {
     return convertKana(value, originalLabel);
   }
@@ -240,14 +227,11 @@ function getProfileValue(profile, key, originalLabel) {
 
 // ==================================================
 // Google Form 組み込みメール欄の自動入力（Bug 1 修正）
-//   「設定 > メールアドレスを収集する」で追加されるメール欄は
-//   通常の [data-params] 質問ブロックとは異なるDOM構造を持つ
 // ==================================================
 function fillGoogleFormBuiltinEmail(profile) {
   if (!profile.email) return 0;
   let filled = 0;
 
-  // 1) input[name="emailAddress"]（最も確実なセレクタ）
   const emailByName = document.querySelector('input[name="emailAddress"]');
   if (emailByName && (!emailByName.value || emailByName.value.trim() === '')) {
     setNativeValue(emailByName, profile.email);
@@ -255,7 +239,6 @@ function fillGoogleFormBuiltinEmail(profile) {
     return filled;
   }
 
-  // 2) input[type="email"] が [data-params] の外にある場合
   const emailInputs = document.querySelectorAll('input[type="email"]');
   for (const input of emailInputs) {
     if (input.closest('[data-params]')) continue;
@@ -265,7 +248,6 @@ function fillGoogleFormBuiltinEmail(profile) {
     return filled;
   }
 
-  // 3) aria-label にメール系キーワードを含む input（[data-params] 外）
   const allInputs = document.querySelectorAll('input');
   for (const input of allInputs) {
     if (input.closest('[data-params]')) continue;
@@ -316,14 +298,46 @@ function fillGoogleForm(profile) {
 }
 
 // ==================================================
-// Google Form 日付フィールド（生年月日対応）
+// 日付コンポーネント判定ヘルパー
+//   aria-label / placeholder から 年・月・日 を多言語で判定
+//   対応言語: 日本語、英語、ドイツ語、フランス語、スペイン語、
+//            ポルトガル語、イタリア語、韓国語、中国語 等
+// ==================================================
+function classifyDateInput(input) {
+  const aria = (input.getAttribute('aria-label') || '');
+  const ph   = (input.placeholder || '');
+  const combined = (aria + ' ' + ph).toLowerCase();
+  const ml   = input.getAttribute('maxlength');
+
+  // --- 年 ---
+  if (/年|year|jahr|année|año|ano|anno|년|yyyy|jjjj|aaaa/i.test(combined)) {
+    return 'year';
+  }
+  // --- 月 ---
+  if (/月|month|monat|mois|mes|mês|mese|월/i.test(combined)) {
+    return 'month';
+  }
+  // --- 日 ---
+  if (/日|day|tag|jour|día|dia|giorno|일/i.test(combined)) {
+    return 'day';
+  }
+
+  // maxlength ヒント: 4桁=年、1-2桁=月or日（位置で後判定）
+  if (ml === '4') return 'year';
+
+  return null;
+}
+
+// ==================================================
+// Google Form 日付フィールド（生年月日対応）v3.3.1
 //   Google Forms の日付質問は [data-params] 内に
 //   年・月・日の個別 input を持つ構造
+//   input の type は "text", "tel", "number", 属性なし など様々
+//   aria-label はブラウザの言語設定に依存する
 // ==================================================
 function fillGoogleFormDate(profile) {
   if (!profile.birthDate) return 0;
 
-  // YYYY-MM-DD 形式をパース
   const parts = profile.birthDate.split('-');
   if (parts.length !== 3) return 0;
   const [yearStr, monthStr, dayStr] = parts;
@@ -344,59 +358,98 @@ function fillGoogleFormDate(profile) {
     const key = matchFieldKey(labelText);
     if (key !== 'birthDate') return;
 
-    // パターン1: input[type="text"] に aria-label や placeholder で年/月/日を判定
-    const inputs = block.querySelectorAll('input[type="text"], input:not([type])');
-    let filledInBlock = false;
+    // === パターン0: input[type="date"] があればそのまま ===
+    const dateInput = block.querySelector('input[type="date"]');
+    if (dateInput) {
+      setNativeValue(dateInput, profile.birthDate);
+      filled++;
+      return;
+    }
 
-    inputs.forEach((input) => {
-      const aria = (input.getAttribute('aria-label') || '').toLowerCase();
-      const ph = (input.placeholder || '').toLowerCase();
-      const combined = aria + ' ' + ph;
-
-      if (combined.includes('年') || combined.includes('yyyy') || combined.includes('year')) {
-        setNativeValue(input, String(year));
-        filledInBlock = true;
-      } else if (combined.includes('月') || combined.includes('mm') || combined.includes('month')) {
-        setNativeValue(input, String(month));
-        filledInBlock = true;
-      } else if (combined.includes('日') || combined.includes('dd') || combined.includes('day')) {
-        setNativeValue(input, String(day));
-        filledInBlock = true;
-      }
+    // === 全 input を取得（type="text", "tel", "number", 属性なし 全て） ===
+    const allInputs = Array.from(block.querySelectorAll('input'));
+    // submit / hidden / radio / checkbox は除外
+    const candidateInputs = allInputs.filter((inp) => {
+      const t = (inp.type || '').toLowerCase();
+      return !['submit', 'hidden', 'radio', 'checkbox', 'button', 'date'].includes(t);
     });
 
-    // パターン2: select 要素（ドロップダウン）での年/月/日
-    const selects = block.querySelectorAll('select');
-    selects.forEach((sel) => {
-      const aria = (sel.getAttribute('aria-label') || '').toLowerCase();
-      let targetValue = null;
+    let yearInput = null;
+    let monthInput = null;
+    let dayInput = null;
+    let filledInBlock = false;
 
-      if (aria.includes('年') || aria.includes('year')) {
-        targetValue = String(year);
-      } else if (aria.includes('月') || aria.includes('month')) {
-        targetValue = String(month);
-      } else if (aria.includes('日') || aria.includes('day')) {
-        targetValue = String(day);
-      }
+    // === パターン1: aria-label / placeholder で判定（多言語対応） ===
+    for (const inp of candidateInputs) {
+      const cls = classifyDateInput(inp);
+      if (cls === 'year')  yearInput  = inp;
+      if (cls === 'month') monthInput = inp;
+      if (cls === 'day')   dayInput   = inp;
+    }
 
-      if (targetValue) {
-        for (const opt of sel.options) {
-          if (opt.value === targetValue || opt.text.trim() === targetValue) {
-            sel.value = opt.value;
-            sel.dispatchEvent(new Event('change', { bubbles: true }));
-            filledInBlock = true;
-            break;
+    if (yearInput || monthInput || dayInput) {
+      if (yearInput)  setNativeValue(yearInput,  String(year));
+      if (monthInput) setNativeValue(monthInput, String(month));
+      if (dayInput)   setNativeValue(dayInput,   String(day));
+      filledInBlock = true;
+    }
+
+    // === パターン2: select 要素（ドロップダウン） ===
+    if (!filledInBlock) {
+      const selects = Array.from(block.querySelectorAll('select'));
+      for (const sel of selects) {
+        const aria = (sel.getAttribute('aria-label') || '').toLowerCase();
+        let targetValue = null;
+
+        if (/年|year|jahr|année|año|anno|년|jjjj|aaaa/i.test(aria)) {
+          targetValue = String(year);
+        } else if (/月|month|monat|mois|mes|mese|월/i.test(aria)) {
+          targetValue = String(month);
+        } else if (/日|day|tag|jour|día|dia|giorno|일/i.test(aria)) {
+          targetValue = String(day);
+        }
+
+        if (targetValue) {
+          for (const opt of sel.options) {
+            if (opt.value === targetValue || opt.text.trim() === targetValue) {
+              sel.value = opt.value;
+              sel.dispatchEvent(new Event('change', { bubbles: true }));
+              filledInBlock = true;
+              break;
+            }
           }
         }
       }
-    });
+    }
 
-    // パターン3: Google Forms の新UIでは位置で判定（年/月/日 の順に並ぶ）
-    if (!filledInBlock && inputs.length >= 3) {
-      const inputArr = Array.from(inputs);
-      setNativeValue(inputArr[0], String(year));
-      setNativeValue(inputArr[1], String(month));
-      setNativeValue(inputArr[2], String(day));
+    // === パターン3: maxlength ヒントで判定 ===
+    if (!filledInBlock && candidateInputs.length >= 2) {
+      const yearByMl = candidateInputs.find((inp) => inp.getAttribute('maxlength') === '4');
+      const others = candidateInputs.filter((inp) => inp !== yearByMl);
+
+      if (yearByMl && others.length >= 2) {
+        setNativeValue(yearByMl, String(year));
+        // 残りの2つは表示順（月→日）
+        setNativeValue(others[0], String(month));
+        setNativeValue(others[1], String(day));
+        filledInBlock = true;
+      }
+    }
+
+    // === パターン4: 位置ベースのフォールバック ===
+    //   Google Forms 日本語ロケールでは 年 / 月 / 日 の順
+    //   3つの input があれば順番に入れる
+    if (!filledInBlock && candidateInputs.length >= 3) {
+      setNativeValue(candidateInputs[0], String(year));
+      setNativeValue(candidateInputs[1], String(month));
+      setNativeValue(candidateInputs[2], String(day));
+      filledInBlock = true;
+    }
+
+    // === パターン5: input が2つだけ（月/日のみ、年なし）===
+    if (!filledInBlock && candidateInputs.length === 2) {
+      setNativeValue(candidateInputs[0], String(month));
+      setNativeValue(candidateInputs[1], String(day));
       filledInBlock = true;
     }
 
@@ -479,13 +532,11 @@ function fillGenericForm(profile) {
 
     const key = matchFieldKey(label);
     if (key) {
-      // 生年月日は type="date" の input にも対応
       if (key === 'birthDate' && profile.birthDate) {
         if (input.type === 'date') {
-          setNativeValue(input, profile.birthDate); // YYYY-MM-DD
+          setNativeValue(input, profile.birthDate);
           filled++;
         } else {
-          // テキストフィールドにはそのまま入力
           setNativeValue(input, profile.birthDate);
           filled++;
         }
