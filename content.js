@@ -1,8 +1,9 @@
 // ======================================================
-// content.js — フォーム自動入力 v3.3.1（日本語版）
+// content.js — フォーム自動入力 v3.4（日本語版）
 //   v3.2: ふりがな（ひらがな）/ フリガナ（カタカナ）自動判定対応
 //   v3.3: Bug修正 + 生年月日・郵便番号・住所対応
 //   v3.3.1: Google Forms 日付フィールド対応を強化（多言語・多type対応）
+//   v3.4: input[type="email"]直接マッチ + autocomplete属性対応 + guessLabel強化
 // ======================================================
 
 // --- キーワード定義 ---
@@ -36,6 +37,26 @@ const FIELD_MAP = {
   birthDate:  ['生年月日', '誕生日', 'birthday', 'date of birth', 'birth date', '生まれ'],
   postalCode: ['郵便番号', 'postal code', 'zip code', 'zip', '〒', 'zipcode', 'postcode'],
   address:    ['住所', 'address', '所在地'],
+};
+
+// --- autocomplete 属性値 → フィールドキーのマッピング ---
+// HTML 標準の autocomplete 値を使って確実にフィールドを特定する
+const AUTOCOMPLETE_MAP = {
+  'email':              'email',
+  'organization':       'facility',
+  'organization-title': 'jobTitle',
+  'tel':                'phone',
+  'tel-national':       'phone',
+  'tel-local':          'phone',
+  'postal-code':        'postalCode',
+  'address-line1':      'address',
+  'address-line2':      'address',
+  'street-address':     'address',
+  'address-level1':     'prefecture',  // 都道府県
+  'bday':               'birthDate',
+  'family-name':        'lastName',
+  'given-name':         'firstName',
+  'name':               'fullName',
 };
 
 // --------------------------------------------------
@@ -226,6 +247,20 @@ function getProfileValue(profile, key, originalLabel) {
 }
 
 // ==================================================
+// autocomplete 属性からフィールドキーを取得
+// ==================================================
+function getKeyFromAutocomplete(el) {
+  const ac = (el.getAttribute('autocomplete') || '').trim().toLowerCase();
+  if (!ac || ac === 'off' || ac === 'on' || ac === 'new-password' || ac === 'current-password') {
+    return null;
+  }
+  // 複数トークンの場合、最後のトークンを使用（例: "shipping postal-code" → "postal-code"）
+  const tokens = ac.split(/\s+/);
+  const lastToken = tokens[tokens.length - 1];
+  return AUTOCOMPLETE_MAP[lastToken] || null;
+}
+
+// ==================================================
 // Google Form 組み込みメール欄の自動入力（Bug 1 修正）
 // ==================================================
 function fillGoogleFormBuiltinEmail(profile) {
@@ -299,9 +334,6 @@ function fillGoogleForm(profile) {
 
 // ==================================================
 // 日付コンポーネント判定ヘルパー
-//   aria-label / placeholder から 年・月・日 を多言語で判定
-//   対応言語: 日本語、英語、ドイツ語、フランス語、スペイン語、
-//            ポルトガル語、イタリア語、韓国語、中国語 等
 // ==================================================
 function classifyDateInput(input) {
   const aria = (input.getAttribute('aria-label') || '');
@@ -309,20 +341,16 @@ function classifyDateInput(input) {
   const combined = (aria + ' ' + ph).toLowerCase();
   const ml   = input.getAttribute('maxlength');
 
-  // --- 年 ---
   if (/年|year|jahr|année|año|ano|anno|년|yyyy|jjjj|aaaa/i.test(combined)) {
     return 'year';
   }
-  // --- 月 ---
   if (/月|month|monat|mois|mes|mês|mese|월/i.test(combined)) {
     return 'month';
   }
-  // --- 日 ---
   if (/日|day|tag|jour|día|dia|giorno|일/i.test(combined)) {
     return 'day';
   }
 
-  // maxlength ヒント: 4桁=年、1-2桁=月or日（位置で後判定）
   if (ml === '4') return 'year';
 
   return null;
@@ -330,10 +358,6 @@ function classifyDateInput(input) {
 
 // ==================================================
 // Google Form 日付フィールド（生年月日対応）v3.3.1
-//   Google Forms の日付質問は [data-params] 内に
-//   年・月・日の個別 input を持つ構造
-//   input の type は "text", "tel", "number", 属性なし など様々
-//   aria-label はブラウザの言語設定に依存する
 // ==================================================
 function fillGoogleFormDate(profile) {
   if (!profile.birthDate) return 0;
@@ -358,7 +382,6 @@ function fillGoogleFormDate(profile) {
     const key = matchFieldKey(labelText);
     if (key !== 'birthDate') return;
 
-    // === パターン0: input[type="date"] があればそのまま ===
     const dateInput = block.querySelector('input[type="date"]');
     if (dateInput) {
       setNativeValue(dateInput, profile.birthDate);
@@ -366,9 +389,7 @@ function fillGoogleFormDate(profile) {
       return;
     }
 
-    // === 全 input を取得（type="text", "tel", "number", 属性なし 全て） ===
     const allInputs = Array.from(block.querySelectorAll('input'));
-    // submit / hidden / radio / checkbox は除外
     const candidateInputs = allInputs.filter((inp) => {
       const t = (inp.type || '').toLowerCase();
       return !['submit', 'hidden', 'radio', 'checkbox', 'button', 'date'].includes(t);
@@ -379,7 +400,6 @@ function fillGoogleFormDate(profile) {
     let dayInput = null;
     let filledInBlock = false;
 
-    // === パターン1: aria-label / placeholder で判定（多言語対応） ===
     for (const inp of candidateInputs) {
       const cls = classifyDateInput(inp);
       if (cls === 'year')  yearInput  = inp;
@@ -394,7 +414,6 @@ function fillGoogleFormDate(profile) {
       filledInBlock = true;
     }
 
-    // === パターン2: select 要素（ドロップダウン） ===
     if (!filledInBlock) {
       const selects = Array.from(block.querySelectorAll('select'));
       for (const sel of selects) {
@@ -422,23 +441,18 @@ function fillGoogleFormDate(profile) {
       }
     }
 
-    // === パターン3: maxlength ヒントで判定 ===
     if (!filledInBlock && candidateInputs.length >= 2) {
       const yearByMl = candidateInputs.find((inp) => inp.getAttribute('maxlength') === '4');
       const others = candidateInputs.filter((inp) => inp !== yearByMl);
 
       if (yearByMl && others.length >= 2) {
         setNativeValue(yearByMl, String(year));
-        // 残りの2つは表示順（月→日）
         setNativeValue(others[0], String(month));
         setNativeValue(others[1], String(day));
         filledInBlock = true;
       }
     }
 
-    // === パターン4: 位置ベースのフォールバック ===
-    //   Google Forms 日本語ロケールでは 年 / 月 / 日 の順
-    //   3つの input があれば順番に入れる
     if (!filledInBlock && candidateInputs.length >= 3) {
       setNativeValue(candidateInputs[0], String(year));
       setNativeValue(candidateInputs[1], String(month));
@@ -446,7 +460,6 @@ function fillGoogleFormDate(profile) {
       filledInBlock = true;
     }
 
-    // === パターン5: input が2つだけ（月/日のみ、年なし）===
     if (!filledInBlock && candidateInputs.length === 2) {
       setNativeValue(candidateInputs[0], String(month));
       setNativeValue(candidateInputs[1], String(day));
@@ -515,6 +528,10 @@ function fillGoogleFormRadio(profile) {
 
 // ==================================================
 // 汎用フォーム テキスト入力（Zoom 等）
+//   v3.4: 3段階の判定で精度を向上
+//     1) input[type="email"] は無条件で email
+//     2) autocomplete 属性があればそれを優先
+//     3) guessLabel + matchFieldKey（従来方式）
 // ==================================================
 function fillGenericForm(profile) {
   let filled = 0;
@@ -526,6 +543,30 @@ function fillGenericForm(profile) {
   inputs.forEach((input) => {
     if (input.value && input.value.trim() !== '') return;
 
+    // --- 最優先: input[type="email"] は無条件で email ---
+    if (input.type === 'email' && profile.email) {
+      setNativeValue(input, profile.email);
+      filled++;
+      return;
+    }
+
+    // --- 優先2: autocomplete 属性によるフィールド特定 ---
+    const acKey = getKeyFromAutocomplete(input);
+    if (acKey) {
+      if (acKey === 'birthDate' && profile.birthDate) {
+        setNativeValue(input, profile.birthDate);
+        filled++;
+        return;
+      }
+      const acValue = profile[acKey];
+      if (acValue) {
+        setNativeValue(input, acValue);
+        filled++;
+        return;
+      }
+    }
+
+    // --- 優先3: guessLabel + matchFieldKey（従来方式） ---
     const originalLabel = guessLabel(input);
     const label = normalizeLabel(originalLabel);
     if (!label) return;
@@ -533,13 +574,8 @@ function fillGenericForm(profile) {
     const key = matchFieldKey(label);
     if (key) {
       if (key === 'birthDate' && profile.birthDate) {
-        if (input.type === 'date') {
-          setNativeValue(input, profile.birthDate);
-          filled++;
-        } else {
-          setNativeValue(input, profile.birthDate);
-          filled++;
-        }
+        setNativeValue(input, profile.birthDate);
+        filled++;
         return;
       }
       const value = getProfileValue(profile, key, originalLabel);
@@ -559,18 +595,37 @@ function fillGenericForm(profile) {
 
   const selects = document.querySelectorAll('select');
   selects.forEach((sel) => {
+    // autocomplete 属性チェック
+    const acKey = getKeyFromAutocomplete(sel);
+    const target = acKey
+      ? selectTargets.find((t) => t.key === acKey)
+      : null;
+
+    if (target && target.value) {
+      for (const opt of sel.options) {
+        if (opt.text.toLowerCase().includes(target.value.toLowerCase()) ||
+            opt.value.toLowerCase().includes(target.value.toLowerCase())) {
+          sel.value = opt.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          filled++;
+          return;
+        }
+      }
+    }
+
+    // 従来方式
     const label = normalizeLabel(guessLabel(sel));
     if (!label) return;
 
     const fieldKey = matchFieldKey(label);
     if (!fieldKey) return;
 
-    const target = selectTargets.find((t) => t.key === fieldKey);
-    if (!target || !target.value) return;
+    const fallbackTarget = selectTargets.find((t) => t.key === fieldKey);
+    if (!fallbackTarget || !fallbackTarget.value) return;
 
     for (const opt of sel.options) {
-      if (opt.text.toLowerCase().includes(target.value.toLowerCase()) ||
-          opt.value.toLowerCase().includes(target.value.toLowerCase())) {
+      if (opt.text.toLowerCase().includes(fallbackTarget.value.toLowerCase()) ||
+          opt.value.toLowerCase().includes(fallbackTarget.value.toLowerCase())) {
         sel.value = opt.value;
         sel.dispatchEvent(new Event('change', { bubbles: true }));
         filled++;
@@ -678,20 +733,40 @@ function getRadioGroupLabel(radio) {
 
 // ==================================================
 // ラベル推測（input / select / textarea 共用）
+//   v3.4: aria-labelledby サポート追加
 // ==================================================
 function guessLabel(el) {
+  // 1) label[for="id"]
   if (el.id) {
     const label = document.querySelector(`label[for="${el.id}"]`);
     if (label) return label.textContent.trim();
   }
 
+  // 2) 親 <label>
   const parentLabel = el.closest('label');
   if (parentLabel) return parentLabel.textContent.trim();
 
+  // 3) aria-label
   if (el.getAttribute('aria-label')) return el.getAttribute('aria-label');
+
+  // 4) aria-labelledby（React/SPA フォームで多用）
+  const labelledBy = el.getAttribute('aria-labelledby');
+  if (labelledBy) {
+    const ids = labelledBy.split(/\s+/);
+    const texts = ids.map((id) => {
+      const labelEl = document.getElementById(id);
+      return labelEl ? labelEl.textContent.trim() : '';
+    }).filter(Boolean);
+    if (texts.length > 0) return texts.join(' ');
+  }
+
+  // 5) placeholder
   if (el.placeholder) return el.placeholder;
+
+  // 6) name 属性
   if (el.name) return el.name;
 
+  // 7) 直前の兄弟要素
   const prev = el.previousElementSibling;
   if (prev) return prev.textContent.trim();
 
