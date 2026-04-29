@@ -15,45 +15,53 @@ const departmentEl    = document.getElementById('department');
 const jobTypeEl       = document.getElementById('jobType');
 const saveBtn         = document.getElementById('save');
 const fillBtn         = document.getElementById('fill');
+const backupBtn       = document.getElementById('backup');
+const restoreBtn      = document.getElementById('restore');
+const restoreFileEl   = document.getElementById('restoreFile');
 const statusEl        = document.getElementById('status');
+
+// ===== フィールドキー一覧（順序固定） =====
+const FIELD_KEYS = [
+  'lastName', 'firstName', 'lastNameKana', 'firstNameKana',
+  'birthDate', 'facility', 'email', 'phone',
+  'postalCode', 'prefecture', 'address',
+  'jobTitle', 'department', 'jobType',
+];
+
+const FIELD_ELS = {
+  lastName: lastNameEl, firstName: firstNameEl,
+  lastNameKana: lastNameKanaEl, firstNameKana: firstNameKanaEl,
+  birthDate: birthDateEl, facility: facilityEl,
+  email: emailEl, phone: phoneEl,
+  postalCode: postalCodeEl, prefecture: prefectureEl,
+  address: addressEl, jobTitle: jobTitleEl,
+  department: departmentEl, jobType: jobTypeEl,
+};
+
+// ===== ヘルパー：フォームからプロフィールオブジェクトを作成 =====
+function getProfileFromForm() {
+  const profile = {};
+  for (const key of FIELD_KEYS) {
+    profile[key] = FIELD_ELS[key].value.trim();
+  }
+  return profile;
+}
+
+// ===== ヘルパー：プロフィールオブジェクトをフォームに反映 =====
+function setFormFromProfile(p) {
+  for (const key of FIELD_KEYS) {
+    FIELD_ELS[key].value = p[key] || '';
+  }
+}
 
 // ===== 起動時：保存済みデータを読み込む =====
 chrome.storage.local.get(['profile'], (result) => {
-  const p = result.profile || {};
-  lastNameEl.value      = p.lastName      || '';
-  firstNameEl.value     = p.firstName     || '';
-  lastNameKanaEl.value  = p.lastNameKana  || '';
-  firstNameKanaEl.value = p.firstNameKana || '';
-  birthDateEl.value     = p.birthDate     || '';
-  facilityEl.value      = p.facility      || '';
-  emailEl.value         = p.email         || '';
-  phoneEl.value         = p.phone         || '';
-  postalCodeEl.value    = p.postalCode    || '';
-  prefectureEl.value    = p.prefecture    || '';
-  addressEl.value       = p.address       || '';
-  jobTitleEl.value      = p.jobTitle      || '';
-  departmentEl.value    = p.department    || '';
-  jobTypeEl.value       = p.jobType       || '';
+  setFormFromProfile(result.profile || {});
 });
 
 // ===== 保存ボタン =====
 saveBtn.addEventListener('click', () => {
-  const profile = {
-    lastName:      lastNameEl.value.trim(),
-    firstName:     firstNameEl.value.trim(),
-    lastNameKana:  lastNameKanaEl.value.trim(),
-    firstNameKana: firstNameKanaEl.value.trim(),
-    birthDate:     birthDateEl.value.trim(),
-    facility:      facilityEl.value.trim(),
-    email:         emailEl.value.trim(),
-    phone:         phoneEl.value.trim(),
-    postalCode:    postalCodeEl.value.trim(),
-    prefecture:    prefectureEl.value.trim(),
-    address:       addressEl.value.trim(),
-    jobTitle:      jobTitleEl.value.trim(),
-    department:    departmentEl.value.trim(),
-    jobType:       jobTypeEl.value.trim(),
-  };
+  const profile = getProfileFromForm();
   chrome.storage.local.set({ profile }, () => {
     showStatus('✅ 保存しました');
   });
@@ -85,6 +93,56 @@ fillBtn.addEventListener('click', async () => {
       });
     }
   );
+});
+
+// ===== バックアップボタン（JSONダウンロード） =====
+backupBtn.addEventListener('click', () => {
+  const profile = getProfileFromForm();
+  const json = JSON.stringify(profile, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const date = new Date().toISOString().slice(0, 10);
+  a.download = `auto-fill-profile-backup-${date}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showStatus('📥 バックアップを保存しました');
+});
+
+// ===== リストアボタン（JSONアップロード） =====
+restoreBtn.addEventListener('click', () => {
+  restoreFileEl.click();
+});
+
+restoreFileEl.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      // バリデーション：少なくとも1つの既知キーがあるか
+      const hasValidKey = FIELD_KEYS.some(k => k in data);
+      if (!hasValidKey) {
+        showStatus('❌ 無効なバックアップファイルです');
+        return;
+      }
+      // フォームに反映
+      setFormFromProfile(data);
+      // ストレージにも保存
+      const profile = getProfileFromForm();
+      chrome.storage.local.set({ profile }, () => {
+        showStatus('📤 リストアしました（保存済み）');
+      });
+    } catch {
+      showStatus('❌ JSONの読み込みに失敗しました');
+    }
+  };
+  reader.readAsText(file);
+  // 同じファイルを再選択できるようリセット
+  restoreFileEl.value = '';
 });
 
 // ===== ステータス表示 =====
