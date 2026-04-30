@@ -1,8 +1,9 @@
 // ======================================================
-// content.js — フォーム自動入力 v3.5.1（日本語版）
-//   v3.5.1: iframe対応 + 全ページリトライ（SPA限定を廃止）
-//   v3.5: Microsoft Forms対応 + SPAリトライ機構 + guessLabel親要素探索強化
-//   v3.4: input[type="email"]直接マッチ + autocomplete属性対応 + guessLabel強化
+// content.js — フォーム自動入力 v3.5.2（日本語版）
+//   v3.5.2: ラベルをautocompleteより優先するように変更
+//   v3.5.1: iframe対応 + 全ページリトライ
+//   v3.5: Microsoft Forms対応 + SPAリトライ機構
+//   v3.4: input[type="email"]直接マッチ + autocomplete属性対応
 //   v3.3.1: Google Forms 日付フィールド対応を強化
 //   v3.3: Bug修正 + 生年月日・郵便番号・住所対応
 //   v3.2: ふりがな（ひらがな）/ フリガナ（カタカナ）自動判定対応
@@ -93,7 +94,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   let filled = attemptFill();
 
-  // 全ページでリトライ（動的フォームの描画完了待ち）
   if (filled === 0) {
     let retries = 0;
     const maxRetries = 3;
@@ -109,7 +109,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
     }, retryInterval);
 
-    return true; // 非同期応答のためチャネルを開いたままにする
+    return true;
   }
 
   sendResponse({ filled });
@@ -279,6 +279,31 @@ function getKeyFromAutocomplete(el) {
   const tokens = ac.split(/\s+/);
   const lastToken = tokens[tokens.length - 1];
   return AUTOCOMPLETE_MAP[lastToken] || null;
+}
+
+// ==================================================
+// 入力欄のフィールドキーを決定（ラベル優先）
+//   1) 表示ラベルがマッチすればそれを使用
+//   2) ラベルでマッチしない場合、autocomplete をフォールバック
+// ==================================================
+function resolveFieldKey(input) {
+  // まず表示ラベルを確認
+  const originalLabel = guessLabelDeep(input);
+  const label = normalizeLabel(originalLabel);
+  if (label) {
+    const labelKey = matchFieldKey(label);
+    if (labelKey) {
+      return { key: labelKey, originalLabel };
+    }
+  }
+
+  // ラベルでマッチしない場合、autocomplete をフォールバック
+  const acKey = getKeyFromAutocomplete(input);
+  if (acKey) {
+    return { key: acKey, originalLabel: originalLabel || '' };
+  }
+
+  return null;
 }
 
 // ==================================================
@@ -650,28 +675,15 @@ function fillMicrosoftFormDirect(profile) {
       return;
     }
 
-    const acKey = getKeyFromAutocomplete(input);
-    if (acKey) {
-      const acValue = (acKey === 'birthDate') ? profile.birthDate : profile[acKey];
-      if (acValue) {
-        setNativeValue(input, acValue);
-        filled++;
-        return;
-      }
-    }
-
-    const originalLabel = guessLabelDeep(input);
-    const label = normalizeLabel(originalLabel);
-    if (!label) return;
-
-    const key = matchFieldKey(label);
-    if (key) {
-      if (key === 'birthDate' && profile.birthDate) {
+    // ラベル優先でフィールドを決定
+    const resolved = resolveFieldKey(input);
+    if (resolved) {
+      if (resolved.key === 'birthDate' && profile.birthDate) {
         setNativeValue(input, profile.birthDate);
         filled++;
         return;
       }
-      const value = getProfileValue(profile, key, originalLabel);
+      const value = getProfileValue(profile, resolved.key, resolved.originalLabel);
       if (value) {
         setNativeValue(input, value);
         filled++;
@@ -686,6 +698,11 @@ function fillMicrosoftFormDirect(profile) {
 
 // ==================================================
 // 汎用フォーム テキスト入力
+//   v3.5.2: ラベルをautocompleteより優先
+//   判定順序:
+//     1) input[type="email"] → 無条件でemail
+//     2) 表示ラベル（guessLabelDeep）→ 最優先
+//     3) autocomplete 属性 → ラベルでマッチしない場合のフォールバック
 // ==================================================
 function fillGenericForm(profile) {
   let filled = 0;
@@ -698,43 +715,27 @@ function fillGenericForm(profile) {
     if (input.value && input.value.trim() !== '') return;
     if (input.type === 'hidden' || input.type === 'submit' || input.type === 'button') return;
 
+    // --- 最優先: input[type="email"] は無条件で email ---
     if (input.type === 'email' && profile.email) {
       setNativeValue(input, profile.email);
       filled++;
       return;
     }
 
-    const acKey = getKeyFromAutocomplete(input);
-    if (acKey) {
-      if (acKey === 'birthDate' && profile.birthDate) {
+    // --- ラベル優先でフィールドを決定 ---
+    const resolved = resolveFieldKey(input);
+    if (resolved) {
+      if (resolved.key === 'birthDate' && profile.birthDate) {
         setNativeValue(input, profile.birthDate);
         filled++;
         return;
       }
-      const acValue = profile[acKey];
-      if (acValue) {
-        setNativeValue(input, acValue);
-        filled++;
-        return;
-      }
-    }
-
-    const originalLabel = guessLabelDeep(input);
-    const label = normalizeLabel(originalLabel);
-    if (!label) return;
-
-    const key = matchFieldKey(label);
-    if (key) {
-      if (key === 'birthDate' && profile.birthDate) {
-        setNativeValue(input, profile.birthDate);
-        filled++;
-        return;
-      }
-      const value = getProfileValue(profile, key, originalLabel);
+      const value = getProfileValue(profile, resolved.key, resolved.originalLabel);
       if (value) {
         setNativeValue(input, value);
         filled++;
       }
+      return;
     }
   });
 
@@ -747,10 +748,10 @@ function fillGenericForm(profile) {
 
   const selects = document.querySelectorAll('select');
   selects.forEach((sel) => {
-    const acKey = getKeyFromAutocomplete(sel);
-    const target = acKey
-      ? selectTargets.find((t) => t.key === acKey)
-      : null;
+    // ラベル優先でフィールドを決定
+    const resolved = resolveFieldKey(sel);
+    const fieldKey = resolved ? resolved.key : null;
+    const target = fieldKey ? selectTargets.find((t) => t.key === fieldKey) : null;
 
     if (target && target.value) {
       for (const opt of sel.options) {
@@ -761,25 +762,6 @@ function fillGenericForm(profile) {
           filled++;
           return;
         }
-      }
-    }
-
-    const label = normalizeLabel(guessLabelDeep(sel));
-    if (!label) return;
-
-    const fieldKey = matchFieldKey(label);
-    if (!fieldKey) return;
-
-    const fallbackTarget = selectTargets.find((t) => t.key === fieldKey);
-    if (!fallbackTarget || !fallbackTarget.value) return;
-
-    for (const opt of sel.options) {
-      if (opt.text.toLowerCase().includes(fallbackTarget.value.toLowerCase()) ||
-          opt.value.toLowerCase().includes(fallbackTarget.value.toLowerCase())) {
-        sel.value = opt.value;
-        sel.dispatchEvent(new Event('change', { bubbles: true }));
-        filled++;
-        break;
       }
     }
   });
